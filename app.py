@@ -1,19 +1,32 @@
-# Telco Customer Churn - Streamlit Deployment App
-# Run locally with:  streamlit run app.py
-# Deploy free on: https://share.streamlit.io  or  Hugging Face Spaces
-
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 import shap
 
-st.set_page_config(page_title="Customer Churn Predictor", page_icon="📉", layout="wide")
+st.set_page_config(page_title="Churn Predictor", page_icon="📉", layout="wide")
 
-# Load trained artifacts (produced by churn_prediction.py)
+# custom styling
+st.markdown("""
+<style>
+.main { background-color: #f8f9fb; }
+div[data-testid="stMetric"] {
+    background-color: white;
+    border: 1px solid #eaeaea;
+    border-radius: 12px;
+    padding: 15px;
+}
+.stButton>button {
+    width: 100%;
+    border-radius: 8px;
+    font-weight: 600;
+}
+</style>
+""", unsafe_allow_html=True)
 
+# load model and preprocessing objects saved from training
 @st.cache_resource
 def load_artifacts():
     model = joblib.load("best_churn_model.pkl")
@@ -27,120 +40,155 @@ def load_artifacts():
 model, scaler, feature_columns, binary_map, multi_cat_cols, num_cols = load_artifacts()
 
 st.title("📉 Telco Customer Churn Predictor")
-st.caption("Predicts churn risk for a customer and explains WHY, using SHAP.")
+st.caption("Fill in customer details and get an instant churn risk score with an explanation.")
 
-# Sidebar - Customer Inputs
+tab1, tab2 = st.tabs(["🔮 Predict", "📊 About the Model"])
 
-st.sidebar.header("Customer Details")
+with tab1:
+    left, right = st.columns([1, 1.6])
 
-gender = st.sidebar.selectbox("Gender", ["Female", "Male"])
-senior = st.sidebar.selectbox("Senior Citizen", [0, 1])
-partner = st.sidebar.selectbox("Partner", ["No", "Yes"])
-dependents = st.sidebar.selectbox("Dependents", ["No", "Yes"])
-tenure = st.sidebar.slider("Tenure (months)", 0, 72, 12)
-phone_service = st.sidebar.selectbox("Phone Service", ["No", "Yes"])
-multiple_lines = st.sidebar.selectbox("Multiple Lines", ["No", "Yes", "No phone service"])
-internet_service = st.sidebar.selectbox("Internet Service", ["DSL", "Fiber optic", "No"])
-online_security = st.sidebar.selectbox("Online Security", ["No", "Yes", "No internet service"])
-online_backup = st.sidebar.selectbox("Online Backup", ["No", "Yes", "No internet service"])
-device_protection = st.sidebar.selectbox("Device Protection", ["No", "Yes", "No internet service"])
-tech_support = st.sidebar.selectbox("Tech Support", ["No", "Yes", "No internet service"])
-streaming_tv = st.sidebar.selectbox("Streaming TV", ["No", "Yes", "No internet service"])
-streaming_movies = st.sidebar.selectbox("Streaming Movies", ["No", "Yes", "No internet service"])
-contract = st.sidebar.selectbox("Contract", ["Month-to-month", "One year", "Two year"])
-paperless_billing = st.sidebar.selectbox("Paperless Billing", ["No", "Yes"])
-payment_method = st.sidebar.selectbox("Payment Method", [
-    "Electronic check", "Mailed check", "Bank transfer (automatic)", "Credit card (automatic)"
-])
-monthly_charges = st.sidebar.slider("Monthly Charges ($)", 18.0, 120.0, 70.0)
-total_charges = st.sidebar.number_input("Total Charges ($)", min_value=0.0, value=float(tenure * monthly_charges))
+    with left:
+        st.markdown("### Customer Details")
 
-predict_btn = st.sidebar.button("Predict Churn Risk", type="primary")
+        with st.expander("👤 Demographics", expanded=True):
+            gender = st.selectbox("Gender", ["Female", "Male"])
+            senior = st.selectbox("Senior Citizen", [0, 1])
+            partner = st.selectbox("Partner", ["No", "Yes"])
+            dependents = st.selectbox("Dependents", ["No", "Yes"])
 
-# Build a single-row dataframe matching the training pipeline
+        with st.expander("📡 Services", expanded=True):
+            tenure = st.slider("Tenure (months)", 0, 72, 12)
+            phone_service = st.selectbox("Phone Service", ["No", "Yes"])
+            multiple_lines = st.selectbox("Multiple Lines", ["No", "Yes", "No phone service"])
+            internet_service = st.selectbox("Internet Service", ["DSL", "Fiber optic", "No"])
+            online_security = st.selectbox("Online Security", ["No", "Yes", "No internet service"])
+            online_backup = st.selectbox("Online Backup", ["No", "Yes", "No internet service"])
+            device_protection = st.selectbox("Device Protection", ["No", "Yes", "No internet service"])
+            tech_support = st.selectbox("Tech Support", ["No", "Yes", "No internet service"])
+            streaming_tv = st.selectbox("Streaming TV", ["No", "Yes", "No internet service"])
+            streaming_movies = st.selectbox("Streaming Movies", ["No", "Yes", "No internet service"])
 
-def preprocess_input(raw: dict) -> pd.DataFrame:
-    row = pd.DataFrame([raw])
+        with st.expander("💳 Billing", expanded=True):
+            contract = st.selectbox("Contract", ["Month-to-month", "One year", "Two year"])
+            paperless_billing = st.selectbox("Paperless Billing", ["No", "Yes"])
+            payment_method = st.selectbox("Payment Method", [
+                "Electronic check", "Mailed check", "Bank transfer (automatic)", "Credit card (automatic)"
+            ])
+            monthly_charges = st.slider("Monthly Charges ($)", 18.0, 120.0, 70.0)
+            total_charges = st.number_input("Total Charges ($)", min_value=0.0, value=float(tenure * monthly_charges))
 
-    # Binary mapping
-    for col, mapping in binary_map.items():
-        row[col] = row[col].map(mapping)
+        predict_btn = st.button("🔍 Predict Churn Risk", type="primary")
 
-    # One-hot encode multi-category columns, then align to training columns
-    row = pd.get_dummies(row, columns=multi_cat_cols, drop_first=True)
-    row = row.reindex(columns=feature_columns, fill_value=0)
+    def preprocess_input(raw: dict) -> pd.DataFrame:
+        row = pd.DataFrame([raw])
 
-    # Scale numeric columns with the SAME scaler used in training
-    row[num_cols] = scaler.transform(row[num_cols])
-    return row
+        for col, mapping in binary_map.items():
+            row[col] = row[col].map(mapping)
 
-raw_input = {
-    "gender": gender, "SeniorCitizen": senior, "Partner": partner, "Dependents": dependents,
-    "tenure": tenure, "PhoneService": phone_service, "MultipleLines": multiple_lines,
-    "InternetService": internet_service, "OnlineSecurity": online_security,
-    "OnlineBackup": online_backup, "DeviceProtection": device_protection,
-    "TechSupport": tech_support, "StreamingTV": streaming_tv, "StreamingMovies": streaming_movies,
-    "Contract": contract, "PaperlessBilling": paperless_billing, "PaymentMethod": payment_method,
-    "MonthlyCharges": monthly_charges, "TotalCharges": total_charges
-}
+        # pd.get_dummies on a single row is unreliable, so build one-hot columns manually
+        for col in multi_cat_cols:
+            val = row.at[0, col]
+            dummy_col = f"{col}_{val}"
+            row[dummy_col] = 1 if dummy_col in feature_columns else 0
+            row.drop(columns=[col], inplace=True)
 
-# Main panel - Prediction + SHAP explanation
+        row = row.reindex(columns=feature_columns, fill_value=0)
 
-col1, col2 = st.columns([1, 1.4])
+        # scale numeric columns using the same scaler from training
+        row[num_cols] = scaler.transform(row[num_cols])
+        return row
 
-if predict_btn:
-    X_input = preprocess_input(raw_input)
-    churn_proba = model.predict_proba(X_input)[0, 1]
-    churn_pred = "Yes" if churn_proba >= 0.5 else "No"
+    raw_input = {
+        "gender": gender, "SeniorCitizen": senior, "Partner": partner, "Dependents": dependents,
+        "tenure": tenure, "PhoneService": phone_service, "MultipleLines": multiple_lines,
+        "InternetService": internet_service, "OnlineSecurity": online_security,
+        "OnlineBackup": online_backup, "DeviceProtection": device_protection,
+        "TechSupport": tech_support, "StreamingTV": streaming_tv, "StreamingMovies": streaming_movies,
+        "Contract": contract, "PaperlessBilling": paperless_billing, "PaymentMethod": payment_method,
+        "MonthlyCharges": monthly_charges, "TotalCharges": total_charges
+    }
 
-    with col1:
-        st.subheader("Prediction Result")
-        st.metric("Churn Probability", f"{churn_proba*100:.1f}%")
-        if churn_proba >= 0.6:
-            st.error(f"⚠️ HIGH RISK — Predicted Churn: {churn_pred}")
-        elif churn_proba >= 0.3:
-            st.warning(f"🟠 MEDIUM RISK — Predicted Churn: {churn_pred}")
+    with right:
+        if predict_btn:
+            X_input = preprocess_input(raw_input)
+            churn_proba = model.predict_proba(X_input)[0, 1]
+            churn_pred = "Yes" if churn_proba >= 0.5 else "No"
+
+            if churn_proba >= 0.6:
+                risk_label, bar_color = "HIGH RISK", "#F44336"
+            elif churn_proba >= 0.3:
+                risk_label, bar_color = "MEDIUM RISK", "#FF9800"
+            else:
+                risk_label, bar_color = "LOW RISK", "#4CAF50"
+
+            # gauge chart for churn probability
+            fig_gauge = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=churn_proba * 100,
+                number={"suffix": "%"},
+                title={"text": f"Churn Probability — {risk_label}"},
+                gauge={
+                    "axis": {"range": [0, 100]},
+                    "bar": {"color": bar_color},
+                    "steps": [
+                        {"range": [0, 30], "color": "#e8f5e9"},
+                        {"range": [30, 60], "color": "#fff3e0"},
+                        {"range": [60, 100], "color": "#ffebee"},
+                    ],
+                }
+            ))
+            fig_gauge.update_layout(height=280, margin=dict(t=40, b=10, l=20, r=20))
+            st.plotly_chart(fig_gauge, use_container_width=True)
+
+            m1, m2 = st.columns(2)
+            m1.metric("Predicted Churn", churn_pred)
+            m2.metric("Risk Level", risk_label)
+
+            st.markdown("**Business Recommendation**")
+            if churn_proba >= 0.6:
+                st.error("Immediately offer a retention discount or contract upgrade call.")
+            elif churn_proba >= 0.3:
+                st.warning("Add to monitoring list; consider a proactive check-in email.")
+            else:
+                st.success("No action needed — customer is stable.")
+
+            st.markdown("---")
+            st.markdown("**Why this prediction? (SHAP)**")
+            try:
+                explainer = shap.TreeExplainer(model)
+                shap_values = explainer.shap_values(X_input)
+                sv = shap_values[1][0] if isinstance(shap_values, list) else shap_values[0]
+
+                shap_df = pd.DataFrame({
+                    "Feature": X_input.columns,
+                    "SHAP Value": sv
+                }).sort_values("SHAP Value", key=abs, ascending=False).head(8)
+                shap_df["Effect"] = np.where(shap_df["SHAP Value"] > 0, "Increases risk", "Decreases risk")
+
+                fig_shap = go.Figure(go.Bar(
+                    x=shap_df["SHAP Value"],
+                    y=shap_df["Feature"],
+                    orientation="h",
+                    marker_color=["#F44336" if v > 0 else "#4CAF50" for v in shap_df["SHAP Value"]],
+                    text=shap_df["Effect"],
+                ))
+                fig_shap.update_layout(
+                    height=350, margin=dict(t=20, b=20, l=10, r=10),
+                    xaxis_title="Impact on prediction", yaxis={"autorange": "reversed"}
+                )
+                st.plotly_chart(fig_shap, use_container_width=True)
+            except Exception:
+                st.info("SHAP explanation is only available for tree-based models (Random Forest / XGBoost).")
         else:
-            st.success(f"✅ LOW RISK — Predicted Churn: {churn_pred}")
+            st.info("⬅️ Fill in the customer details and click **Predict Churn Risk** to see results here.")
 
-        st.markdown("**Business Recommendation:**")
-        if churn_proba >= 0.6:
-            st.write("Immediately offer a retention discount or contract upgrade call.")
-        elif churn_proba >= 0.3:
-            st.write("Add to monitoring list; consider a proactive check-in email.")
-        else:
-            st.write("No action needed — customer is stable.")
-
-    with col2:
-        st.subheader("Why this prediction? (SHAP Explanation)")
-        try:
-            explainer = shap.TreeExplainer(model)
-            shap_values = explainer.shap_values(X_input)
-            # Handle both binary-classifier output formats
-            sv = shap_values[1][0] if isinstance(shap_values, list) else shap_values[0]
-
-            shap_df = pd.DataFrame({
-                "Feature": X_input.columns,
-                "SHAP Value": sv
-            }).sort_values("SHAP Value", key=abs, ascending=False).head(8)
-
-            fig, ax = plt.subplots(figsize=(7, 5))
-            colors = ["#F44336" if v > 0 else "#4CAF50" for v in shap_df["SHAP Value"]]
-            ax.barh(shap_df["Feature"], shap_df["SHAP Value"], color=colors)
-            ax.set_xlabel("Impact on Churn Prediction (red = increases risk, green = decreases risk)")
-            ax.invert_yaxis()
-            plt.tight_layout()
-            st.pyplot(fig)
-        except Exception as e:
-            st.info("SHAP explanation is only available for tree-based models (Random Forest / XGBoost).")
-else:
-    st.info("⬅️ Fill in the customer details in the sidebar and click **Predict Churn Risk**.")
-
-# Footer - project context for anyone viewing the deployed app
-
-st.markdown("---")
-st.caption(
-    "Built with scikit-learn + XGBoost + SHAP. "
-    "Model selected via 5-fold cross-validation and GridSearchCV hyperparameter tuning "
-    "across Logistic Regression, Decision Tree, Random Forest, Naive Bayes, and XGBoost."
-)
+with tab2:
+    st.markdown("### How this model was built")
+    st.write(
+        "Five algorithms were trained as a baseline comparison — Logistic Regression, "
+        "Decision Tree, Random Forest, Naive Bayes, and XGBoost — using 5-fold cross-validation, "
+        "SMOTE for class imbalance, and feature scaling. The best-performing model was then "
+        "tuned further with GridSearchCV before being deployed here."
+    )
+    st.markdown("**Metrics used:** Accuracy, Precision, Recall, F1-Score, ROC-AUC")
+    st.markdown("**Explainability:** SHAP values show which features push a prediction toward or away from churn.")
